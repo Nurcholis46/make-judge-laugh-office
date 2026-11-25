@@ -1,78 +1,90 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
-// Make the AI Judge Laugh (make.fun): write the office-life joke to
-// entry.txt.
+// Entry writer for the "Make the AI Judge Laugh" bounty.
 //
-// The joke wins on a true office observation decoded: everyone who has
-// worked an inbox knows the 9 a.m. "ASAP" that earns a 5 p.m. "noted,"
-// and the surprising turn is the translation — "noted" is office code
-// for "never." The two timestamps make the neglect concrete instead of
-// abstract, the quoted words mirror how office speak actually looks in
-// an email thread, and the final one-word punchline is the part that
-// sticks after a single read in a pairwise comparison. The line is
-// tight, setup-twist-punch, one breath long, and reads cleanly out
-// loud, which is what
-// the judge brief weighs: true to office life, surprising turn, tight
-// line, fresh feel.
+// What this does, in order:
+//   1. Hold the joke as a single constant string.
+//   2. Run a set of pre-flight checks that mirror the sealed gate.
+//   3. Publish the joke to entry.txt with an atomic replace.
+//   4. Re-read the published file and confirm it round-tripped exactly.
 //
-// Gate, verified against the kit RULES.txt: /output/entry.txt must be
-// UTF-8 text of 1 to 200 characters, not only white space. The task text
-// describes it as one line of under 200 characters about office life;
-// the sealed scorer enforces 1 to 200, so that is what is checked here.
-// This line is 110 code points (counted with the spread iterator below,
-// so any surrogate pair would count as one). The checks below fail
-// loudly on any violation — wrong length, blank text, a line break,
-// edge whitespace, or a control or invisible character — so a bad line
-// can never reach the judge.
-const text =
+// Why this joke: the humor comes from a translation the reader performs
+// instantly. A 9 a.m. urgent request answered at 5 p.m. with a polite
+// acknowledgment needs no setup for anyone who has lived in an inbox,
+// and the closing one-word decoding — that acknowledgment meaning
+// "never" — is the turn that makes it memorable in a head-to-head read.
+// The timestamps keep the neglect specific, the quoted office phrases
+// keep it recognizably real, and the short setup-twist-punch shape
+// keeps it tight enough to land in one breath.
+//
+// Gate notes (checked against the kit rules before writing this):
+// the scorer accepts UTF-8 text of 1..200 characters that is not only
+// whitespace. This program additionally enforces the single-line
+// description from the task text: no line breaks, no paragraph
+// separators, no leading/trailing whitespace, and no control or
+// zero-width characters that would be invisible to a reader but would
+// still count toward the byte total. Any violation throws before a
+// file is written, so an invalid line can never be published.
+// Character counting uses the spread iterator on purpose: it counts
+// code points, so an astral character counts once, matching how the
+// gate describes length in characters rather than UTF-16 units.
+
+const joke =
   "I put 'ASAP' in an email at 9 a.m. and got a reply at 5 p.m. saying 'noted,' which is office code for 'never.'";
 
-const codePoints = [...text].length;
-if (codePoints < 1 || codePoints > 200 || text.trim().length === 0) {
-  throw new Error(
-    `entry must be 1-200 characters of non-blank text, got ${codePoints}`,
-  );
-}
-if (text.includes("\n") || text.includes("\r")) {
-  throw new Error("entry must be a single line");
-}
-if (text.includes("\u2028") || text.includes("\u2029")) {
-  throw new Error("entry must not contain line/paragraph separators");
-}
-if (text !== text.trim()) {
-  throw new Error("entry must not start or end with whitespace");
-}
-// A BOM or zero-width character is invisible to a reader but real to the
-// judge's byte count, so reject them with the control set.
-if (/[\u0000-\u001f\u007f\ufeff\u200b-\u200d]/.test(text)) {
-  throw new Error("entry must not contain control or invisible characters");
+function assertGate(candidate: string): number {
+  const length = [...candidate].length;
+  if (length < 1 || length > 200) {
+    throw new Error(`gate: expected 1-200 characters, got ${length}`);
+  }
+  if (candidate.trim().length === 0) {
+    throw new Error("gate: entry must not be blank");
+  }
+  if (candidate.includes("\n") || candidate.includes("\r")) {
+    throw new Error("gate: entry must stay on one line");
+  }
+  if (candidate.includes("\u2028") || candidate.includes("\u2029")) {
+    throw new Error("gate: line/paragraph separators are not allowed");
+  }
+  if (candidate !== candidate.trim()) {
+    throw new Error("gate: no leading or trailing whitespace");
+  }
+  if (/[\u0000-\u001f\u007f\ufeff\u200b-\u200d]/.test(candidate)) {
+    throw new Error("gate: control or invisible characters are not allowed");
+  }
+  return length;
 }
 
-const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-mkdirSync(outputDir, { recursive: true });
-// Atomic write: temp file beside the target, then rename, so entry.txt is
-// always the complete line or nothing at all. Mode 0644 because the grader
-// collects outputs as another user.
-const tmpPath = `${outputDir}/.entry.txt.tmp`;
-const finalPath = `${outputDir}/entry.txt`;
-writeFileSync(tmpPath, text, { encoding: "utf8", mode: 0o644 });
-chmodSync(tmpPath, 0o644);
-renameSync(tmpPath, finalPath);
+function publish(candidate: string): string {
+  const dir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+  mkdirSync(dir, { recursive: true });
+  const staging = `${dir}/.entry.txt.tmp`;
+  const target = `${dir}/entry.txt`;
+  // Stage beside the target, then rename: readers either see the old
+  // file or the complete new one, never a half-written joke. Mode is
+  // pinned to 0644 because the collector runs as a different user.
+  writeFileSync(staging, candidate, { encoding: "utf8", mode: 0o644 });
+  chmodSync(staging, 0o644);
+  renameSync(staging, target);
+  return target;
+}
 
-// Read back and prove the file on disk is exactly the gated line: same
-// string, no trailing line break, same byte length. This read-back guard
-// is deliberate — the judge scores the file bytes, not the variable, so
-// any encoding drift or stray newline must fail here rather than silently.
-const written = readFileSync(finalPath, "utf8");
-if (written !== text) {
-  throw new Error("entry file does not match the gated line");
+function verifyOnDisk(path: string, expected: string): void {
+  const actual = readFileSync(path, "utf8");
+  if (actual !== expected) {
+    throw new Error("verify: file content differs from the gated joke");
+  }
+  if (actual.endsWith("\n") || actual.endsWith("\r")) {
+    throw new Error("verify: file must not end with a line break");
+  }
+  if (Buffer.byteLength(actual, "utf8") !== Buffer.byteLength(expected, "utf8")) {
+    throw new Error("verify: byte length mismatch after write");
+  }
 }
-if (written.endsWith("\n") || written.endsWith("\r")) {
-  throw new Error("entry file must not end with a line break");
-}
-if (Buffer.byteLength(written, "utf8") !== Buffer.byteLength(text, "utf8")) {
-  throw new Error("entry file byte length does not match the gated line");
-}
+
+const charCount = assertGate(joke);
+const writtenPath = publish(joke);
+verifyOnDisk(writtenPath, joke);
 console.error(
-  `entry written: ${codePoints} chars, ${Buffer.byteLength(text, "utf8")} bytes, status ok`,
+  `entry written: ${charCount} chars, ${Buffer.byteLength(joke, "utf8")} bytes, status ok`,
 );
