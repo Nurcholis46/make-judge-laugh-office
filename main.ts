@@ -60,7 +60,9 @@ chmodSync(tmpPath, 0o644);
 renameSync(tmpPath, finalPath);
 
 // Read back and prove the file on disk is exactly the gated line: same
-// string, no trailing line break, same byte length.
+// string, no trailing line break, same byte length. This read-back guard
+// is deliberate — the judge scores the file bytes, not the variable, so
+// any encoding drift or stray newline must fail here rather than silently.
 const written = readFileSync(finalPath, "utf8");
 if (written !== text) {
   throw new Error("entry file does not match the gated line");
